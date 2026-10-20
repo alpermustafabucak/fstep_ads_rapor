@@ -115,7 +115,12 @@ if page=="Firmalar":
             try:
                 client.table("firms").insert({"name":name.strip(),"website":website.strip(),"currency":currency}).execute()
                 st.success("Firma eklendi.");st.rerun()
-            except Exception as exc:st.error("Firma kaydedilemedi (aynı isim mevcut olabilir).")
+            except Exception as exc:
+                msg=str(exc)
+                if "duplicate key" in msg or "23505" in msg:
+                    st.error("Bu firma adı zaten kayıtlı. Farklı bir isim kullanın.")
+                else:
+                    st.error("Firma kaydedilemedi. Supabase hatası: " + msg[:900])
     if firms:st.dataframe(pd.DataFrame(firms)[["name","website","currency"]],hide_index=True,use_container_width=True)
 elif page=="PDF Yükle":
     if not firms:st.info("Önce Firmalar bölümünden firma oluşturun.");st.stop()

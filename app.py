@@ -234,8 +234,11 @@ elif page in ("Genel Bakış","Rapor Arşivi"):
                 try:
                     data=client.storage.from_("ads-reports").download(item["file_path"])
                     st.download_button("PDF indir",data=data,file_name=item["file_name"],mime="application/pdf",key="download_"+item["id"])
-                    encoded=base64.b64encode(data).decode()
-                    st.components.v1.html('<iframe src="data:application/pdf;base64,'+encoded+'" width="100%" height="700"></iframe>',height=710)
+                    with fitz.open(stream=data,filetype="pdf") as document:
+                        st.caption(f"PDF önizleme · {len(document)} sayfa")
+                        page_number=st.number_input("Sayfa",min_value=1,max_value=len(document),value=1,step=1,key="page_"+item["id"])
+                        pix=document[page_number-1].get_pixmap(matrix=fitz.Matrix(1.5,1.5),alpha=False)
+                        st.image(pix.tobytes("png"),caption=f"Sayfa {page_number} / {len(document)}",use_container_width=True)
                     if st.button("Önizlemeyi kapat",key="close_"+item["id"]):
                         st.session_state.pop("pdf_preview",None)
                         st.rerun()

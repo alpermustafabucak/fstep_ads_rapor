@@ -89,7 +89,7 @@ if not login():st.stop()
 client=db()
 with st.sidebar:
     st.header("📊 Fstep Social")
-    page=st.radio("Menü",["Genel Bakış","PDF Yükle","Arşiv","Firmalar"])
+    page=st.radio("Menü",["Genel Bakış","PDF Yükle","Rapor Arşivi","Firmalar"])
     if st.button("Çıkış yap"):
         st.session_state.authenticated=False
         st.rerun()
@@ -102,7 +102,7 @@ except Exception as exc:
     st.error("Veritabanı tablolarına ulaşılamadı. Önce schema.sql dosyasını Supabase SQL Editor'de çalıştırın.")
     st.stop()
 firm_names={f["name"]:f for f in firms}
-st.title({"Genel Bakış":"📈 Genel Bakış","PDF Yükle":"📤 PDF Rapor Yükle","Arşiv":"🗂️ Rapor Arşivi","Firmalar":"🏢 Firmalar"}[page])
+st.title({"Genel Bakış":"📈 Genel Bakış","PDF Yükle":"📤 PDF Rapor Yükle","Rapor Arşivi":"🗂️ Rapor Arşivi","Firmalar":"🏢 Firmalar"}[page])
 if page=="Firmalar":
     with st.form("new_firm"):
         name=st.text_input("Firma adı")
@@ -165,7 +165,7 @@ elif page=="PDF Yükle":
                 st.success("Rapor özel bulut arşivine kaydedildi.")
             except Exception as exc:
                 st.error("Kaydetme başarısız. Aynı tarihli rapor veya veritabanı ayarlarını kontrol edin.")
-elif page in ("Genel Bakış","Arşiv"):
+elif page in ("Genel Bakış","Rapor Arşivi"):
     if not firms:st.info("Başlamak için Firmalar bölümüne bir firma ekleyin.");st.stop()
     chosen=st.selectbox("Firma",["Tüm Firmalar"]+list(firm_names))
     query=client.table("reports").select("id,firm_id,report_date,file_path,file_name,spend,impressions,clicks,conversions,cpc,ctr,cpa,extracted_text").order("report_date",desc=True).limit(1000)
@@ -195,27 +195,50 @@ elif page in ("Genel Bakış","Arşiv"):
                 st.write(f'**{label}:** {fmt(latest[key])} (önceki: {fmt(previous[key])})')
         st.info("Dönüşüm sayısı, raporda ölçülen reklam aksiyonlarıdır; kesinleşmiş satış sayısı değildir.")
     else:
-        st.dataframe(df[["firma","report_date","file_name","spend","impressions","clicks","conversions","cpa"]],hide_index=True,use_container_width=True)
-        labels=[f'{r["report_date"]} | {r["firma"]} | {r["file_name"]} | {r["id"][:8]}' for r in reports]
-        index=st.selectbox("Rapor ayrıntısı",range(len(reports)),format_func=lambda i:labels[i])
-        report=reports[index]
-        col1,col2=st.columns(2)
-        with col1:
-            try:
-                raw=client.storage.from_("ads-reports").download(report["file_path"])
-                st.download_button("📥 PDF indir",data=raw,file_name=report["file_name"],mime="application/pdf")
-            except Exception:st.error("PDF indirilemedi.")
-        with col2:
-            if st.button("Seçili raporu sil"):
+        import base64
+        st.subheader("Tarih filtresi")
+        days=pd.to_datetime(df["report_date"]).dt.date
+        period=st.date_input("Başlangıç / bitiş",(days.min(),days.max()),min_value=days.min(),max_value=days.max())
+        if isinstance(period,(tuple,list)) and len(period)==2:
+            filtered=df[(days>=period[0])&(days<=period[1])].copy()
+        elif isinstance(period,(tuple,list)) and len(period)==1:
+            filtered=df[days==period[0]].copy()
+        else:
+            filtered=df[days==period].copy()
+        if filtered.empty:
+            st.info("Seçili tarihlerde rapor yok.")
+            st.stop()
+        st.subheader("Firma harcamaları")
+        curr={f["name"]:f["currency"] for f in firms}
+        symbols={"GBP":"£","TRY":"₺","USD":"$","EUR":"€"}
+        totals=filtered.groupby("firma")["spend"].sum()
+        for name,amount in totals.items():
+            st.metric(name,f'{symbols.get(curr.get(name),"")}{amount:,.2f}')
+        codes={curr.get(name) for name in totals.index}
+        if len(codes)==1:
+            st.metric("GENEL TOPLAM",f'{symbols.get(next(iter(codes)),"")}{filtered["spend"].sum():,.2f}')
+        else:
+            st.warning("Farklı para birimleri ayrı hesaplanır.")
+            for code in sorted(codes):
+                names=[name for name in totals.index if curr.get(name)==code]
+                st.metric("Toplam "+code,f'{totals.loc[names].sum():,.2f} {code}')
+        st.caption("Firma filtresi üstteki Firma seçiminden yapılır.")
+        st.subheader("PDF Arşivi")
+        for _,item in filtered.sort_values("report_date",ascending=False).iterrows():
+            a,b,c=st.columns([2,3,1])
+            a.write(str(item["report_date"])+" · "+item["firma"])
+            b.write(item["file_name"])
+            if c.button("👁",key="eye_"+item["id"],help="PDF ön izle"):
+                st.session_state["pdf_preview"]=item["id"]
+            if st.session_state.get("pdf_preview")==item["id"]:
                 try:
-                    client.storage.from_("ads-reports").remove([report["file_path"]])
-                    client.table("reports").delete().eq("id",report["id"]).execute()
-                    st.success("Silindi.");st.rerun()
-                except Exception:st.error("Silme başarısız.")
-        st.subheader("Rapor değerlendirmesi")
-        spend=report.get("spend") or 0; conv=report.get("conversions") or 0; clicks=report.get("clicks") or 0
-        if conv==0 and spend>0:st.warning("Harcama mevcut ancak ölçülen dönüşüm yok. Dönüşüm takibini ve arama kalitesini inceleyin.")
-        elif conv:st.success(f"Ölçülen {conv} dönüşüm, dönüşüm başı yaklaşık {spend/conv:.2f} maliyet.")
-        st.write(f'Tıklama: {clicks} · Gösterim: {report.get("impressions") or 0} · CTR: %{fmt(report.get("ctr"))}')
-        with st.expander("PDF'den çıkarılan metin"):
-            st.text_area("Metin",report.get("extracted_text") or "Metin bulunamadı",height=300)
+                    data=client.storage.from_("ads-reports").download(item["file_path"])
+                    st.download_button("PDF indir",data=data,file_name=item["file_name"],mime="application/pdf",key="download_"+item["id"])
+                    encoded=base64.b64encode(data).decode()
+                    st.components.v1.html('<iframe src="data:application/pdf;base64,'+encoded+'" width="100%" height="700"></iframe>',height=710)
+                    if st.button("Önizlemeyi kapat",key="close_"+item["id"]):
+                        st.session_state.pop("pdf_preview",None)
+                        st.rerun()
+                except Exception as exc:
+                    st.error("PDF açılamadı: "+str(exc)[:300])
+            st.divider()
